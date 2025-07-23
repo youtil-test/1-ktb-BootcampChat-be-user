@@ -3,7 +3,8 @@ const User = require('../models/User');
 const { upload } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs').promises;
-
+const {DeleteObjectCommand}=require('@aws-sdk/client-s3');
+const s3= require('../utils/s3Client')
 // 회원가입
 exports.register = async (req, res) => {
   try {

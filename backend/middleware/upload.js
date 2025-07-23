@@ -1,17 +1,22 @@
 // backend/middleware/upload.js
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+// const fs = require('fs');
 const crypto = require('crypto');
+const multerS3 = require('multer-s3');
+const s3=require('../utils/s3Client');
 
 // uploads 디렉토리 절대 경로 설정
 const uploadDir = path.join(__dirname, '../uploads');
 
-// uploads 디렉토리 생성 및 권한 설정
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-  fs.chmodSync(uploadDir, '0755');
-}
+
+
+
+// // uploads 디렉토리 생성 및 권한 설정
+// if (!fs.existsSync(uploadDir)) {
+//   fs.mkdirSync(uploadDir, { recursive: true });
+//   fs.chmodSync(uploadDir, '0755');
+// }
 
 // MIME 타입과 확장자 매핑
 const ALLOWED_TYPES = {
@@ -38,39 +43,29 @@ const FILE_SIZE_LIMITS = {
   document: 20 * 1024 * 1024 // 20MB for documents
 };
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
+const storage = multerS3({
+  s3,
+  bucket: process.env.AWS_BUCKET_NAME,
+  contentType: multerS3.AUTO_CONTENT_TYPE,
+  key: (req, file, cb) => {
     try {
-      // 원본 파일명을 버퍼로 변환하여 UTF-8로 디코딩
       const originalname = Buffer.from(file.originalname, 'binary').toString('utf8');
-      
-      // 원본 파일명을 req 객체에 저장
       req.originalFileName = originalname;
 
-      // 파일 확장자 추출
       const ext = path.extname(originalname).toLowerCase();
-      
-      // 안전한 파일명 생성 (타임스탬프 + 랜덤 문자열 + 확장자)
       const timestamp = Date.now();
       const randomString = crypto.randomBytes(8).toString('hex');
-      const safeFilename = `${timestamp}_${randomString}${ext}`;
+      const filename = `${timestamp}_${randomString}${ext}`;
 
-      // 파일 확장자 검증
       const allowedExtensions = Object.values(ALLOWED_TYPES).flat();
       if (!allowedExtensions.includes(ext)) {
         return cb(new Error('지원하지 않는 파일 확장자입니다.'));
       }
 
-      cb(null, safeFilename);
-    } catch (error) {
-      console.error('Filename processing error:', error);
-      cb(new Error('파일명 처리 중 오류가 발생했습니다.'));
+      cb(null, `uploads/${filename}`);
+    } catch (err) {
+      console.error('S3 key error:', err);
+      cb(new Error('파일명 생성 오류'));
     }
   }
 });
@@ -99,37 +94,23 @@ const validateFileSize = (file) => {
 
 const fileFilter = (req, file, cb) => {
   try {
-    // 파일명을 UTF-8로 디코딩
     const originalname = Buffer.from(file.originalname, 'binary').toString('utf8');
-    
-    // MIME 타입 검증
+
     if (!ALLOWED_TYPES[file.mimetype]) {
-      const fileType = getFileType(file.mimetype);
-      return cb(new Error(`지원하지 않는 ${fileType} 형식입니다.`), false);
+      return cb(new Error(`지원하지 않는 ${getFileType(file.mimetype)} 형식입니다.`), false);
     }
 
-    // Content-Length 헤더 검증
-    const declaredSize = parseInt(req.headers['content-length']);
-    if (declaredSize > 50 * 1024 * 1024) {
-      return cb(new Error('파일 크기는 50MB를 초과할 수 없습니다.'), false);
-    }
-
-    // 파일명 길이 검증 (UTF-8 바이트 길이 기준)
     const filenameBytes = Buffer.from(originalname, 'utf8').length;
     if (filenameBytes > 255) {
       return cb(new Error('파일명이 너무 깁니다.'), false);
     }
 
-    // 파일 확장자와 MIME 타입 일치 여부 확인
     const ext = path.extname(originalname).toLowerCase();
     if (!ALLOWED_TYPES[file.mimetype].includes(ext)) {
-      const fileType = getFileType(file.mimetype);
-      return cb(new Error(`${fileType} 확장자가 올바르지 않습니다.`), false);
+      return cb(new Error(`${getFileType(file.mimetype)} 확장자가 올바르지 않습니다.`), false);
     }
 
-    // 원본 파일명을 multer의 file 객체에 저장
     file.originalname = originalname;
-
     cb(null, true);
   } catch (error) {
     console.error('File filter error:', error);
@@ -139,12 +120,12 @@ const fileFilter = (req, file, cb) => {
 
 // multer 인스턴스 생성
 const uploadMiddleware = multer({
-  storage: storage,
+  storage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
-    files: 1 // 한 번에 하나의 파일만 업로드 가능
+    fileSize: 50 * 1024 * 1024,
+    files: 1
   },
-  fileFilter: fileFilter
+  fileFilter
 });
 
 // 에러 핸들러 미들웨어
@@ -155,14 +136,14 @@ const errorHandler = (error, req, res, next) => {
     file: req.file
   });
 
-  // 업로드된 파일이 있다면 삭제
-  if (req.file) {
-    try {
-      fs.unlinkSync(req.file.path);
-    } catch (unlinkError) {
-      console.error('Failed to delete uploaded file:', unlinkError);
-    }
-  }
+  // // 업로드된 파일이 있다면 삭제
+  // if (req.file) {
+  //   try {
+  //     fs.unlinkSync(req.file.path);
+  //   } catch (unlinkError) {
+  //     console.error('Failed to delete uploaded file:', unlinkError);
+  //   }
+  // }
 
   if (error instanceof multer.MulterError) {
     switch (error.code) {
@@ -200,17 +181,21 @@ const errorHandler = (error, req, res, next) => {
 };
 
 // 파일 경로 검증 함수
-const isPathSafe = (filepath) => {
+const isPathSafe = (key) => {
+  return typeof key === 'string' && key.startsWith('uploads/');
+};
+const deleteFromS3 = async (key) => {
   try {
-    const resolvedPath = path.resolve(filepath);
-    const resolvedUploadDir = path.resolve(uploadDir);
-    return resolvedPath.startsWith(resolvedUploadDir);
+    if (!isPathSafe(key)) throw new Error('안전하지 않은 S3 경로입니다.');
+    const command = new DeleteObjectCommand({
+      Bucket: process.env.AWS_S3_BUCKET_NAME,
+      Key: key
+    });
+    await s3.send(command);
   } catch (error) {
-    console.error('Path validation error:', error);
-    return false;
+    console.error('S3 파일 삭제 실패:', error);
   }
 };
-
 module.exports = {
   upload: uploadMiddleware,
   errorHandler,
@@ -218,5 +203,6 @@ module.exports = {
   isPathSafe,
   validateFileSize,
   ALLOWED_TYPES,
-  getFileType
+  getFileType,
+  deleteFromS3
 };

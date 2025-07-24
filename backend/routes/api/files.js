@@ -19,6 +19,11 @@ router.get('/download/:filename',
   fileController.downloadFile
 );
 
+router.post('/presigned-upload',
+  auth,
+  fileController.getPresignedUploadUrl
+)
+
 // 파일 보기 (미리보기용)
 router.get('/view/:filename',
   auth,

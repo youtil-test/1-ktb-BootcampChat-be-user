@@ -3,20 +3,11 @@ const Message = require('../models/Message');
 const Room = require('../models/Room');
 const { processFileForRAG } = require('../services/fileService');
 const path = require('path');
-const fs = require('fs');
-const { promisify } = require('util');
 const crypto = require('crypto');
-const { uploadDir } = require('../middleware/upload');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { GetObjectCommand,DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { GetObjectCommand,DeleteObjectCommand,PutObjectCommand } = require('@aws-sdk/client-s3');
 const s3 = require('../utils/s3Client'); 
-const fsPromises = {
-  writeFile: promisify(fs.writeFile),
-  unlink: promisify(fs.unlink),
-  access: promisify(fs.access),
-  mkdir: promisify(fs.mkdir),
-  rename: promisify(fs.rename)
-};
+
 
 const isPathSafe = (filepath, directory) => {
   const resolvedPath = path.resolve(filepath);
@@ -57,6 +48,37 @@ const getFileFromRequest = async (req) => {
 
 exports.uploadFile = async (req, res) => {
   try {
+    // ✅ Presigned URL 업로드 방식 처리
+    if (!req.file && req.body.path && req.body.url) {
+      const {
+        filename,
+        originalname,
+        mimetype,
+        size,
+        path,
+        url
+      } = req.body;
+
+      const file = new File({
+        filename,
+        originalname,
+        mimetype,
+        size,
+        user: req.user.id,
+        path,
+        url
+      });
+
+      await file.save();
+
+      return res.status(200).json({
+        success: true,
+        message: '파일 메타데이터가 저장되었습니다.',
+        file
+      });
+    }
+
+    // ✅ 기존 multer-s3 업로드 방식 처리
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -64,8 +86,7 @@ exports.uploadFile = async (req, res) => {
       });
     }
 
-    // multer-s3 사용 시 path 대신 key/location 사용
-    const safeFilename = req.file.key?.split('/').pop(); // "123456_random.pdf"
+    const safeFilename = req.file.key?.split('/').pop();
     const s3Key = req.file.key;
     const s3Url = req.file.location;
 
@@ -81,23 +102,15 @@ exports.uploadFile = async (req, res) => {
 
     await file.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: '파일 업로드 성공',
-      file: {
-        _id: file._id,
-        filename: file.filename,
-        originalname: file.originalname,
-        mimetype: file.mimetype,
-        size: file.size,
-        uploadDate: file.uploadDate,
-        url: file.url
-      }
+      file
     });
 
   } catch (error) {
     console.error('File upload error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '파일 업로드 중 오류가 발생했습니다.',
       error: error.message
@@ -122,6 +135,32 @@ exports.downloadFile = async (req, res) => {
   } catch (error) {
     handleFileError(error, res);
   }
+};
+
+exports.getPresignedUploadUrl = async (req, res) => {
+  const { originalname, mimetype, size } = req.body;
+  const filename = generateSafeFilename(originalname); // timestamp + random
+  const userHash = crypto.createHash('md5').update(req.user.id).digest('hex').slice(0, 2);
+  const now = new Date();
+  const prefix = `uploads/${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()}/${userHash}`;
+  const key = `${prefix}/${filename}`;
+
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+    ContentType: mimetype,
+    Metadata: {
+      uploadedBy: req.user.id
+    }
+  });
+
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 60 });
+
+  res.json({
+    uploadUrl,
+    fileKey: key,
+    fileUrl: `https://${process.env.AWS_BUCKET_NAME}.s3.ap-northeast-2.amazonaws.com/${key}`
+  });
 };
 
 exports.viewFile = async (req, res) => {

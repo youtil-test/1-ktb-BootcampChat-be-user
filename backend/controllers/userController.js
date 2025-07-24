@@ -1,7 +1,9 @@
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const {DeleteObjectCommand}=require('@aws-sdk/client-s3');
-const s3= require('../utils/s3Client')
+const s3= require('../utils/s3Client');
+const ProfileCacheService = require('../services/profileCacheService');
+
 // 회원가입
 exports.register = async (req, res) => {
   try {
@@ -94,11 +96,15 @@ exports.register = async (req, res) => {
   }
 };
 
-// 프로필 조회
+// 프로필 조회 (ProfileCacheService 사용)
 exports.getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
-    if (!user) {
+    const userId = req.user.id;
+
+    // ProfileCacheService를 통한 캐시 조회
+    const { profile, fromCache } = await ProfileCacheService.getProfile(userId);
+    
+    if (!profile) {
       return res.status(404).json({
         success: false,
         message: '사용자를 찾을 수 없습니다.'
@@ -107,12 +113,8 @@ exports.getProfile = async (req, res) => {
 
     res.json({
       success: true,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        profileImage: user.profileImage
-      }
+      user: profile,
+      cached: fromCache // 디버깅용 플래그
     });
 
   } catch (error) {
@@ -124,10 +126,11 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-// 프로필 업데이트
+// 프로필 업데이트 (ProfileCacheService 사용)
 exports.updateProfile = async (req, res) => {
   try {
     const { name } = req.body;
+    const userId = req.user.id;
 
     if (!name || name.trim().length === 0) {
       return res.status(400).json({
@@ -136,7 +139,7 @@ exports.updateProfile = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -147,15 +150,13 @@ exports.updateProfile = async (req, res) => {
     user.name = name.trim();
     await user.save();
 
+    // ProfileCacheService를 통한 캐시 업데이트
+    const updatedProfile = await ProfileCacheService.updateProfile(userId, user);
+
     res.json({
       success: true,
       message: '프로필이 업데이트되었습니다.',
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        profileImage: user.profileImage
-      }
+      user: updatedProfile
     });
 
   } catch (error) {
@@ -262,10 +263,11 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-// 프로필 이미지 업로드
+// 프로필 이미지 업로드 (ProfileCacheService 사용)
 exports.uploadProfileImage = async (req, res) => {
   try {
     const { profileImage} = req.body;
+    const userId = req.user.id;
 
     if (!profileImage) {
       return res.status(400).json({
@@ -274,7 +276,7 @@ exports.uploadProfileImage = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: '사용자를 찾을 수 없습니다.' });
     }
@@ -295,6 +297,9 @@ exports.uploadProfileImage = async (req, res) => {
     user.profileImage = "https://"+process.env.AWS_BUCKET_NAME+".s3.ap-northeast-2.amazonaws.com/"+profileImage;
     await user.save();
 
+    // ProfileCacheService를 통한 캐시 업데이트
+    await ProfileCacheService.updateProfile(userId, user);
+
     res.json({
       success: true,
       message: '프로필 이미지가 저장되었습니다.',
@@ -307,10 +312,11 @@ exports.uploadProfileImage = async (req, res) => {
   }
 };
 
-// 프로필 이미지 삭제
+// 프로필 이미지 삭제 (ProfileCacheService 사용)
 exports.deleteProfileImage = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const userId = req.user.id;
+    const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: '사용자를 찾을 수 없습니다.' });
 
     if (user.profileImage) {
@@ -327,6 +333,9 @@ exports.deleteProfileImage = async (req, res) => {
 
       user.profileImage = '';
       await user.save();
+
+      // ProfileCacheService를 통한 캐시 업데이트
+      await ProfileCacheService.updateProfile(userId, user);
     }
 
     res.json({ success: true, message: '프로필 이미지가 삭제되었습니다.' });
@@ -337,10 +346,11 @@ exports.deleteProfileImage = async (req, res) => {
   }
 };
 
-// 회원 탈퇴
+// 회원 탈퇴 (ProfileCacheService 사용)
 exports.deleteAccount = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const userId = req.user.id;
+    const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: '사용자를 찾을 수 없습니다.' });
 
     if (user.profileImage) {
@@ -356,6 +366,9 @@ exports.deleteAccount = async (req, res) => {
     }
 
     await user.deleteOne();
+
+    // ProfileCacheService를 통한 캐시 무효화
+    await ProfileCacheService.invalidateProfile(userId);
 
     res.json({ success: true, message: '회원 탈퇴가 완료되었습니다.' });
 

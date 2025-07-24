@@ -21,6 +21,12 @@ router.put('/profile',
   userController.updateProfile
 );
 
+// 비밀번호 변경
+router.put('/change-password',
+  auth,
+  userController.changePassword
+);
+
 // 프로필 이미지 업로드
 router.post('/profile-image',
   auth,

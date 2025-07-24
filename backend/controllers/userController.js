@@ -170,6 +170,101 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
+// 비밀번호 변경
+exports.changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    // 입력값 검증
+    const validationErrors = [];
+
+    if (!currentPassword) {
+      validationErrors.push({
+        field: 'currentPassword',
+        message: '현재 비밀번호를 입력해주세요.'
+      });
+    }
+
+    if (!newPassword) {
+      validationErrors.push({
+        field: 'newPassword',
+        message: '새 비밀번호를 입력해주세요.'
+      });
+    } else if (newPassword.length < 6) {
+      validationErrors.push({
+        field: 'newPassword',
+        message: '새 비밀번호는 6자 이상이어야 합니다.'
+      });
+    }
+
+    if (!confirmPassword) {
+      validationErrors.push({
+        field: 'confirmPassword',
+        message: '새 비밀번호 확인을 입력해주세요.'
+      });
+    }
+
+    if (newPassword && confirmPassword && newPassword !== confirmPassword) {
+      validationErrors.push({
+        field: 'confirmPassword',
+        message: '새 비밀번호가 일치하지 않습니다.'
+      });
+    }
+
+    if (currentPassword && newPassword && currentPassword === newPassword) {
+      validationErrors.push({
+        field: 'newPassword',
+        message: '새 비밀번호는 현재 비밀번호와 달라야 합니다.'
+      });
+    }
+
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors: validationErrors
+      });
+    }
+
+    // 사용자 조회
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: '사용자를 찾을 수 없습니다.'
+      });
+    }
+
+    // 현재 비밀번호 확인
+    const isCurrentPasswordValid = await user.matchPassword(currentPassword);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: '현재 비밀번호가 올바르지 않습니다.',
+        errors: [{
+          field: 'currentPassword',
+          message: '현재 비밀번호가 올바르지 않습니다.'
+        }]
+      });
+    }
+
+    // 새 비밀번호로 변경
+    user.password = newPassword;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '비밀번호가 성공적으로 변경되었습니다.'
+    });
+
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({
+      success: false,
+      message: '비밀번호 변경 중 오류가 발생했습니다.'
+    });
+  }
+};
+
 // 프로필 이미지 업로드
 exports.uploadProfileImage = async (req, res) => {
   try {

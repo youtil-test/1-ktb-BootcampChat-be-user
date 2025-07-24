@@ -2,6 +2,7 @@ const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/keys');
 const SessionService = require('../services/sessionService');
+const ProfileCacheService = require('../services/profileCacheService');
 
 const authController = {
   async register(req, res) {

@@ -1,0 +1,28 @@
+name: Backend CD
+
+on:
+  push:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+jobs:
+  deploy-to-aws:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Add AWS PEM key
+        run: |
+          echo "${{ secrets.AWS_PEM_KEY_DEV }}" > aws-key.pem
+          chmod 600 aws-key.pem
+
+      - name: Deploy on AWS server (Pull and run 1-load-test-be:latest on 8080)
+        run: |
+          ssh -o StrictHostKeyChecking=no -i aws-key.pem ubuntu@${{ secrets.AWS_HOST_DEV }} << 'EOF'
+            docker pull 1-load-test-be:latest
+            docker stop 1-load-test-be || true
+            docker rm 1-load-test-be || true
+            docker run -d --name 1-load-test-be -p 8080:8080 1-load-test-be:latest
+          EOF

@@ -363,8 +363,9 @@ const authController = {
         });
       }
 
-      // 사용자 정보 조회
-      const user = await User.findById(decoded.user.id);
+      // ProfileCacheService를 통한 사용자 정보 조회
+      const { profile: user, fromCache } = await ProfileCacheService.getProfile(decoded.user.id);
+      
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -373,7 +374,7 @@ const authController = {
       }
 
       // 세션 검증
-      const validationResult = await SessionService.validateSession(user._id, sessionId);
+      const validationResult = await SessionService.validateSession(decoded.user.id, sessionId);
       if (!validationResult.isValid) {
         console.log('Invalid session:', validationResult);
         return res.status(401).json({
@@ -384,9 +385,9 @@ const authController = {
       }
 
       // 세션 갱신
-      await SessionService.refreshSession(user._id, sessionId);
+      await SessionService.refreshSession(decoded.user.id, sessionId);
 
-      console.log('Token verification successful for user:', user._id);
+      console.log('Token verification successful for user:', decoded.user.id, fromCache ? '(cached)' : '(from DB)');
 
       // 프로필 업데이트 필요 여부 확인
       if (validationResult.needsProfileRefresh) {
@@ -396,11 +397,12 @@ const authController = {
       res.json({
         success: true,
         user: {
-          _id: user._id,
+          _id: user.id,
           name: user.name,
           email: user.email,
           profileImage: user.profileImage
-        }
+        },
+        cached: fromCache // 디버깅용
       });
 
     } catch (error) {
